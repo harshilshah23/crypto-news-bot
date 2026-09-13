@@ -1,0 +1,16 @@
+﻿{
+  "name": "crypto-market-news-telegram-bot",
+  "version": "1.0.0",
+  "description": "Continuous high-signal crypto and financial market news Telegram bot",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node tests/test_all.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "fast-xml-parser": "^4.5.3",
+    "grammy": "^1.35.0"
+  }
+}
