@@ -13,6 +13,11 @@ async function main() {
 
   const { bot, pipeline, subscriptionStore } = botInstance;
 
+  // Global Grammy bot error handler to prevent unhandled crashes
+  bot.catch((err) => {
+    console.error('❌ Grammy bot error:', err.message);
+  });
+
   // Lightweight healthcheck server
   const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -40,7 +45,10 @@ async function main() {
   runMonitoringLoop(bot, pipeline, subscriptionStore);
 
   // Start receiving user commands
-  await bot.start();
+  console.log('📡 Starting bot polling listener...');
+  bot.start().catch((err) => {
+    console.error('❌ bot.start() polling error:', err.message);
+  });
 }
 
 main().catch(err => {
