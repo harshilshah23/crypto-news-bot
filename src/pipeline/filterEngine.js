@@ -1,6 +1,6 @@
 ﻿/**
- * Relevance & Signal Filter Engine
- * Rejects low-value noise: clickbait, SEO spam, meme coin shilling, price predictions, irrelevant stocks.
+ * Relevance & Signal Filter Engine with Strict UTC Freshness
+ * Rejects low-value noise: clickbait, SEO spam, meme coin shilling, price predictions, irrelevant stocks, and STALE articles.
  */
 
 // Low-value spam / clickbait patterns that should be immediately rejected
@@ -43,7 +43,7 @@ const REJECT_PATTERNS = [
 const HIGH_SIGNAL_CRYPTO_KEYWORDS = [
   'bitcoin', 'btc', 'ethereum', 'eth', 'solana', 'sol', 'etf', 'etfs',
   'inflows', 'outflows', 'sec', 'cftc', 'stablecoin', 'usdt', 'usdc',
-  'defi', 'binance', 'coinbase', 'blackrock', 'fidelity', 'fidelity',
+  'defi', 'binance', 'coinbase', 'blackrock', 'fidelity',
   'grayscale', 'tether', 'circle', 'microstrategy', 'tokenized', 'tokenization',
   'custody', 'liquidity', 'validator', 'layer 2', 'treasury', 'reserves'
 ];
@@ -61,53 +61,123 @@ const REPUTABLE_SOURCES = new Set([
   'decrypt', 'dl news', 'marketwatch', 'associated press', 'ap news'
 ]);
 
-export function calculateRelevanceScore(article) {
-  const title = (article.title || '').toLowerCase();
+/**
+ * Parses any publication date into a valid UTC timestamp.
+ * Returns null if the date is missing or invalid.
+ */
+export function parseUtcTimestamp(dateInput) {
+  if (!dateInput) return null;
+  const d = new Date(dateInput);
+  const time = d.getTime();
+  if (isNaN(time)) return null;
+  return time;
+}
+
+/**
+ * Calculates age in minutes from the current UTC time.
+ */
+export function calculateAgeMinutes(pubTimestamp, currentUtcMs = Date.now()) {
+  if (!pubTimestamp) return null;
+  const diffMs = currentUtcMs - pubTimestamp;
+  return Math.max(0, Math.floor(diffMs / (1000 * 60)));
+}
+
+/**
+ * Calculates relevance score and enforces hard UTC freshness (<= 12 hours / 720 minutes)
+ */
+export function evaluateArticle(article, currentUtcMs = Date.now()) {
+  const source = article.source || 'Unknown';
+  const headline = article.title || '';
+  const pubTimestamp = parseUtcTimestamp(article.publishedAt);
+
+  // 1. Validate date
+  if (!pubTimestamp) {
+    const logEntry = {
+      source,
+      headline,
+      publishedAt: article.publishedAt,
+      ageMinutes: null,
+      status: 'REJECTED',
+      reason: 'Invalid or missing publication date'
+    };
+    return { passed: false, score: 0, ageMinutes: null, pubTimestamp: null, logEntry };
+  }
+
+  const ageMinutes = calculateAgeMinutes(pubTimestamp, currentUtcMs);
+
+  // 2. HARD FRESHNESS FILTER: <= 12 hours (720 minutes)
+  if (ageMinutes > 720) {
+    const logEntry = {
+      source,
+      headline,
+      publishedAt: new Date(pubTimestamp).toISOString(),
+      ageMinutes,
+      status: 'REJECTED',
+      reason: 'older than 12h'
+    };
+    return { passed: false, score: 0, ageMinutes, pubTimestamp, logEntry };
+  }
+
+  // 3. Spam / Clickbait / Prediction patterns
+  const title = headline.toLowerCase();
   const desc = (article.description || '').toLowerCase();
   const text = `${title} ${desc}`;
-  const source = (article.source || '').toLowerCase();
 
-  // 1. Immediate rejection check (Spam / Clickbait / Price Predictions)
   for (const pattern of REJECT_PATTERNS) {
     if (pattern.test(title) || pattern.test(desc)) {
-      return { score: 0, reason: `Matches noise pattern: ${pattern.toString()}` };
+      const logEntry = {
+        source,
+        headline,
+        publishedAt: new Date(pubTimestamp).toISOString(),
+        ageMinutes,
+        status: 'REJECTED',
+        reason: `Matches noise pattern: ${pattern.toString()}`
+      };
+      return { passed: false, score: 0, ageMinutes, pubTimestamp, logEntry };
     }
   }
 
-  // 2. Max age check (must be fresh within 24 hours)
-  if (article.publishedAt) {
-    const pubTime = new Date(article.publishedAt).getTime();
-    if (!isNaN(pubTime)) {
-      const ageHours = (Date.now() - pubTime) / (1000 * 60 * 60);
-      if (ageHours > 24) {
-        return { score: 0, reason: 'Too old (>24 hours)' };
-      }
-    }
-  }
-
-  let score = 20; // Base score
-
-  // 3. Check Crypto entity signals
+  // 4. Entity matching
   let cryptoHits = 0;
   for (const kw of HIGH_SIGNAL_CRYPTO_KEYWORDS) {
     if (text.includes(kw)) cryptoHits++;
   }
 
-  // 4. Check Macro entity signals
   let macroHits = 0;
   for (const kw of HIGH_SIGNAL_MACRO_KEYWORDS) {
     if (text.includes(kw)) macroHits++;
   }
 
   if (cryptoHits === 0 && macroHits === 0) {
-    return { score: 10, reason: 'No crypto or relevant macro keywords found' };
+    const logEntry = {
+      source,
+      headline,
+      publishedAt: new Date(pubTimestamp).toISOString(),
+      ageMinutes,
+      status: 'REJECTED',
+      reason: 'No crypto or relevant macro keywords found'
+    };
+    return { passed: false, score: 0, ageMinutes, pubTimestamp, logEntry };
   }
 
-  // Add points for entity strength
+  // 5. Score calculation
+  let score = 20;
   score += Math.min(cryptoHits * 15, 45);
   score += Math.min(macroHits * 15, 30);
 
-  // Bonus for High-Impact events: ETF inflows, Fed policy, regulatory decisions
+  // Freshness priority ranking:
+  // 0–2 hours (0–120m) = highest priority (+25 pts)
+  // 2–6 hours (120–360m) = high priority (+15 pts)
+  // 6–12 hours (360–720m) = acceptable (+5 pts)
+  if (ageMinutes <= 120) {
+    score += 25;
+  } else if (ageMinutes <= 360) {
+    score += 15;
+  } else {
+    score += 5;
+  }
+
+  // Event bonus
   if (
     /etf (inflows|outflows|demand|records|surpass|approval)/i.test(text) ||
     /spot (bitcoin|ethereum) etf/i.test(text) ||
@@ -115,31 +185,59 @@ export function calculateRelevanceScore(article) {
     /(rate cut|rate hike|fomc decision|cpi prints|cpi rises|cpi falls)/i.test(text) ||
     /treasury bill|tokenized bond/i.test(text)
   ) {
-    score += 25;
+    score += 20;
   }
 
-  // Source Reputation Bonus
-  for (const repSource of REPUTABLE_SOURCES) {
-    if (source.includes(repSource)) {
+  // Reputable source bonus
+  const srcLower = source.toLowerCase();
+  for (const rep of REPUTABLE_SOURCES) {
+    if (srcLower.includes(rep)) {
       score += 15;
       break;
     }
   }
 
-  // Cap score at 100
-  return { score: Math.min(score, 100), reason: `CryptoHits: ${cryptoHits}, MacroHits: ${macroHits}` };
+  score = Math.min(score, 100);
+
+  const passed = score >= 60;
+  const logEntry = {
+    source,
+    headline,
+    publishedAt: new Date(pubTimestamp).toISOString(),
+    ageMinutes,
+    status: passed ? 'FRESH' : 'REJECTED',
+    reason: passed ? `Passed filter (score: ${score})` : `Score ${score} below threshold 60`
+  };
+
+  return { passed, score, ageMinutes, pubTimestamp, logEntry };
 }
 
-export function filterNewsArticles(articles, minScore = 65) {
+/**
+ * Filter, log, and return only verified fresh high-signal articles
+ */
+export function filterFreshNewsArticles(articles, minScore = 60, currentUtcMs = Date.now()) {
   const passed = [];
 
   for (const article of articles) {
-    const { score, reason } = calculateRelevanceScore(article);
-    if (score >= minScore) {
+    const evaluation = evaluateArticle(article, currentUtcMs);
+    const { logEntry } = evaluation;
+
+    // Structured internal debug logging
+    console.log(`[NEWS] ${logEntry.source} | ${logEntry.headline}`);
+    console.log(`publishedAt: ${logEntry.publishedAt || 'N/A'}`);
+    console.log(`age: ${logEntry.ageMinutes !== null ? logEntry.ageMinutes + ' minutes' : 'UNKNOWN'}`);
+    console.log(`status: ${logEntry.status}`);
+    if (logEntry.status === 'REJECTED') {
+      console.log(`reason: ${logEntry.reason}`);
+    }
+    console.log(''); // newline
+
+    if (evaluation.passed && evaluation.score >= minScore) {
       passed.push({
         ...article,
-        relevanceScore: score,
-        filterReason: reason
+        relevanceScore: evaluation.score,
+        ageMinutes: evaluation.ageMinutes,
+        pubTimestamp: evaluation.pubTimestamp
       });
     }
   }

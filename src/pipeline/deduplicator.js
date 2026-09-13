@@ -2,11 +2,6 @@
  * Deduplication Engine
  * Identifies and clusters overlapping news coverage across outlets (e.g. Reuters, CoinDesk, CNBC)
  * so multiple articles on the same event produce ONLY ONE message.
- *
- * Uses:
- * 1. Normalized headline token similarity
- * 2. Financial entity extraction (e.g., Bitcoin ETFs, Federal Reserve, CPI)
- * 3. Semantic action overlap (inflows, rate cuts, lawsuits, etc.)
  */
 
 const STOP_WORDS = new Set([
@@ -92,7 +87,7 @@ export function calculateStorySimilarity(articleA, articleB) {
     if (entB.has(e)) sharedEntities++;
   }
 
-  // If two articles share 2+ core financial entities (e.g. BTC + ETF + FLOWS) and have at least 1 shared word
+  // If two articles share 2+ core financial entities and have at least 1 shared word
   if (sharedEntities >= 2 && intersection >= 1) {
     return Math.max(wordSim, 0.45);
   }
@@ -106,15 +101,9 @@ export class Deduplicator {
   }
 
   deduplicateBatch(articles, similarityThreshold = 0.35) {
-    const sorted = [...articles].sort((a, b) => {
-      const scoreDiff = (b.relevanceScore || 0) - (a.relevanceScore || 0);
-      if (scoreDiff !== 0) return scoreDiff;
-      return new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime();
-    });
-
     const clusters = [];
 
-    for (const article of sorted) {
+    for (const article of articles) {
       const cleaned = cleanHeadline(article.title);
       if (!cleaned || cleaned.length < 10) continue;
 
@@ -138,6 +127,15 @@ export class Deduplicator {
           url: article.url,
           title: article.title
         });
+        // If current article is newer than lead article, promote it to lead
+        const curTime = article.pubTimestamp || new Date(article.publishedAt).getTime();
+        const leadTime = matchedCluster.leadArticle.pubTimestamp || new Date(matchedCluster.leadArticle.publishedAt).getTime();
+        if (curTime > leadTime) {
+          matchedCluster.leadArticle = {
+            ...article,
+            title: cleaned
+          };
+        }
       } else {
         clusters.push({
           leadArticle: {

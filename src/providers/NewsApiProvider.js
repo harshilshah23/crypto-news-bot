@@ -28,7 +28,8 @@ export class NewsApiProvider extends INewsProvider {
 
     for (const query of this.queries) {
       try {
-        const url = `${this.baseUrl}?q=${encodeURIComponent(query)}&language=en&sortBy=publishedAt&pageSize=15&apiKey=${encodeURIComponent(this.apiKey)}`;
+        // Explicitly sort by publishedAt and retrieve 30 items per query
+        const url = `${this.baseUrl}?q=${encodeURIComponent(query)}&language=en&sortBy=publishedAt&pageSize=30&apiKey=${encodeURIComponent(this.apiKey)}`;
         const res = await fetch(url, {
           headers: { 'User-Agent': 'CryptoMarketNewsBot/1.0' },
           signal: AbortSignal.timeout(6000)

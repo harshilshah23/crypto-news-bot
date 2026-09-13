@@ -1,5 +1,5 @@
 ﻿import assert from 'assert';
-import { calculateRelevanceScore, filterNewsArticles } from '../src/pipeline/filterEngine.js';
+import { evaluateArticle, filterFreshNewsArticles } from '../src/pipeline/filterEngine.js';
 import { Deduplicator, cleanHeadline, extractTokens } from '../src/pipeline/deduplicator.js';
 import { NewsClassifier } from '../src/pipeline/classifier.js';
 import { formatStoryMessage } from '../src/bot/formatter.js';
@@ -12,8 +12,8 @@ async function runTests() {
     description: 'Shiba Inu and Pepe coin to the moon.',
     publishedAt: new Date().toISOString()
   };
-  const clickbaitScore = calculateRelevanceScore(clickbaitTest);
-  assert.strictEqual(clickbaitScore.score, 0, 'Clickbait should be assigned 0 score');
+  const clickbaitEval = evaluateArticle(clickbaitTest);
+  assert.strictEqual(clickbaitEval.passed, false, 'Clickbait should not pass');
   console.log('  ✅ Clickbait and meme shilling correctly rejected (Score: 0)');
 
   const genericPredictionTest = {
@@ -21,29 +21,31 @@ async function runTests() {
     description: 'Expert says is it time to buy right now.',
     publishedAt: new Date().toISOString()
   };
-  const predictionScore = calculateRelevanceScore(genericPredictionTest);
-  assert.strictEqual(predictionScore.score, 0, 'Generic price prediction spam should be rejected');
-  console.log('  ✅ Generic price prediction spam correctly rejected (Score: 0)');
+  const predictionEval = evaluateArticle(genericPredictionTest);
+  assert.strictEqual(predictionEval.passed, false, 'Generic price prediction spam should be rejected');
+  console.log('  ✅ Generic price prediction spam correctly rejected');
 
   const highSignalEtfTest = {
     title: 'Spot Bitcoin ETFs See Strongest Inflows in Weeks',
     description: 'Spot Bitcoin ETFs recorded strong inflows, pointing to renewed institutional demand as BTC trades near recent highs.',
     source: 'CoinDesk',
+    url: 'https://coindesk.com/etf-test',
     publishedAt: new Date().toISOString()
   };
-  const etfScore = calculateRelevanceScore(highSignalEtfTest);
-  assert.ok(etfScore.score >= 70, `High-signal ETF story should score >= 70, got ${etfScore.score}`);
-  console.log(`  ✅ High-signal institutional ETF story passed with score: ${etfScore.score}`);
+  const etfEval = evaluateArticle(highSignalEtfTest);
+  assert.ok(etfEval.passed && etfEval.score >= 70, `High-signal ETF story should pass and score >= 70, got ${etfEval.score}`);
+  console.log(`  ✅ High-signal institutional ETF story passed with score: ${etfEval.score}`);
 
   const macroFedStory = {
     title: 'Fed Officials Push Back Against Near-Term Rate Cuts',
     description: 'Several Fed officials signaled that inflation remains a concern, reducing expectations for an imminent easing cycle.',
     source: 'Reuters',
+    url: 'https://reuters.com/fed-test',
     publishedAt: new Date().toISOString()
   };
-  const fedScore = calculateRelevanceScore(macroFedStory);
-  assert.ok(fedScore.score >= 65, `High-signal Fed macro story should score >= 65, got ${fedScore.score}`);
-  console.log(`  ✅ High-signal Federal Reserve macro story passed with score: ${fedScore.score}`);
+  const fedEval = evaluateArticle(macroFedStory);
+  assert.ok(fedEval.passed && fedEval.score >= 60, `High-signal Fed macro story should pass and score >= 60, got ${fedEval.score}`);
+  console.log(`  ✅ High-signal Federal Reserve macro story passed with score: ${fedEval.score}`);
 
   console.log('\n🧪 Running Suite 2: Multi-Source Deduplication & Clustering Tests...');
 

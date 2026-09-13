@@ -83,7 +83,16 @@ export class RssFallbackProvider extends INewsProvider {
           }
 
           const description = (item.description || item.summary || '').toString().replace(/<[^>]*>/g, '').trim();
-          const pubDate = item.pubDate || item.published || item.updated || new Date().toISOString();
+          
+          // Parse raw date into ISO string / UTC representation
+          const rawDate = item.pubDate || item.published || item.updated || null;
+          let publishedAt = null;
+          if (rawDate) {
+            const d = new Date(rawDate);
+            if (!isNaN(d.getTime())) {
+              publishedAt = d.toISOString();
+            }
+          }
 
           stories.push({
             id: `rss:${link}`,
@@ -91,7 +100,7 @@ export class RssFallbackProvider extends INewsProvider {
             description,
             url: link,
             source: sourceName,
-            publishedAt: pubDate
+            publishedAt
           });
         }
       } catch (err) {
