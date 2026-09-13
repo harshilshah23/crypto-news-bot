@@ -1,6 +1,6 @@
 ﻿/**
  * Relevance & Signal Filter Engine with Strict UTC Freshness
- * Rejects low-value noise: clickbait, SEO spam, meme coin shilling, price predictions, irrelevant stocks, and STALE articles.
+ * Rejects low-value noise: clickbait, SEO spam, meme coin shilling, price predictions, irrelevant stocks, and STALE articles (> 1 hour).
  */
 
 // Low-value spam / clickbait patterns that should be immediately rejected
@@ -83,9 +83,9 @@ export function calculateAgeMinutes(pubTimestamp, currentUtcMs = Date.now()) {
 }
 
 /**
- * Calculates relevance score and enforces hard UTC freshness (<= 12 hours / 720 minutes)
+ * Calculates relevance score and enforces hard UTC freshness (<= maxAgeMinutes, default 60 minutes / 1 hour)
  */
-export function evaluateArticle(article, currentUtcMs = Date.now()) {
+export function evaluateArticle(article, currentUtcMs = Date.now(), maxAgeMinutes = 60) {
   const source = article.source || 'Unknown';
   const headline = article.title || '';
   const pubTimestamp = parseUtcTimestamp(article.publishedAt);
@@ -105,15 +105,15 @@ export function evaluateArticle(article, currentUtcMs = Date.now()) {
 
   const ageMinutes = calculateAgeMinutes(pubTimestamp, currentUtcMs);
 
-  // 2. HARD FRESHNESS FILTER: <= 12 hours (720 minutes)
-  if (ageMinutes > 720) {
+  // 2. HARD FRESHNESS FILTER: Strict 1-hour window (<= maxAgeMinutes)
+  if (ageMinutes > maxAgeMinutes) {
     const logEntry = {
       source,
       headline,
       publishedAt: new Date(pubTimestamp).toISOString(),
       ageMinutes,
       status: 'REJECTED',
-      reason: 'older than 12h'
+      reason: `older than ${maxAgeMinutes}m (1 hour limit)`
     };
     return { passed: false, score: 0, ageMinutes, pubTimestamp, logEntry };
   }
@@ -166,12 +166,12 @@ export function evaluateArticle(article, currentUtcMs = Date.now()) {
   score += Math.min(macroHits * 15, 30);
 
   // Freshness priority ranking:
-  // 0–2 hours (0–120m) = highest priority (+25 pts)
-  // 2–6 hours (120–360m) = high priority (+15 pts)
-  // 6–12 hours (360–720m) = acceptable (+5 pts)
-  if (ageMinutes <= 120) {
+  // 0–20 minutes = ultra breaking (+25 pts)
+  // 20–45 minutes = breaking (+15 pts)
+  // 45–60 minutes = fresh (+5 pts)
+  if (ageMinutes <= 20) {
     score += 25;
-  } else if (ageMinutes <= 360) {
+  } else if (ageMinutes <= 45) {
     score += 15;
   } else {
     score += 5;
@@ -215,11 +215,11 @@ export function evaluateArticle(article, currentUtcMs = Date.now()) {
 /**
  * Filter, log, and return only verified fresh high-signal articles
  */
-export function filterFreshNewsArticles(articles, minScore = 60, currentUtcMs = Date.now()) {
+export function filterFreshNewsArticles(articles, minScore = 60, currentUtcMs = Date.now(), maxAgeMinutes = 60) {
   const passed = [];
 
   for (const article of articles) {
-    const evaluation = evaluateArticle(article, currentUtcMs);
+    const evaluation = evaluateArticle(article, currentUtcMs, maxAgeMinutes);
     const { logEntry } = evaluation;
 
     // Structured internal debug logging

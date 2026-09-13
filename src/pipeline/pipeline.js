@@ -12,6 +12,7 @@ export class NewsDeliveryPipeline {
     this.publishedStore = new PublishedStore();
     this.deduplicator = new Deduplicator(this.publishedStore);
     this.classifier = new NewsClassifier(config);
+    this.maxAgeMinutes = config.maxArticleAgeMinutes || 60; // 1 hour max age
   }
 
   /**
@@ -19,12 +20,12 @@ export class NewsDeliveryPipeline {
    * FETCH
    * → NORMALIZE
    * → REMOVE INVALID DATES
-   * → REMOVE ARTICLES >12 HOURS OLD (and low signal)
+   * → REMOVE ARTICLES > 1 HOUR OLD (strict freshness)
    * → DEDUPLICATE
    * → SORT BY publishedAt DESC (newest first)
    * → RANK & SELECT
    * → SUMMARIZE
-   * → SEND
+   * → SEND (oldest in batch first so newest appears at bottom of chat)
    */
   async runCycle(maxToDeliver = 5) {
     const currentUtcMs = Date.now();
@@ -34,9 +35,9 @@ export class NewsDeliveryPipeline {
     const rawStories = await this.aggregator.fetchAllCandidateStories();
     console.log(`[Pipeline] 1. Fetched ${rawStories.length} candidate stories across sources.`);
 
-    // 2. NORMALIZE, REMOVE INVALID DATES, REMOVE ARTICLES >12 HOURS OLD
-    console.log('[Pipeline] 2. Applying Hard 12-Hour Freshness & Signal Filter...');
-    const freshStories = filterFreshNewsArticles(rawStories, this.config.minRelevanceScore || 60, currentUtcMs);
+    // 2. NORMALIZE, REMOVE INVALID DATES, REMOVE ARTICLES > 1 HOUR OLD
+    console.log(`[Pipeline] 2. Applying Hard ${this.maxAgeMinutes}-Minute Freshness Filter...`);
+    const freshStories = filterFreshNewsArticles(rawStories, this.config.minRelevanceScore || 60, currentUtcMs, this.maxAgeMinutes);
     console.log(`[Pipeline] Passed freshness & relevance filter: ${freshStories.length} articles.`);
 
     // 3. DEDUPLICATE against seen history & cluster overlapping coverage
@@ -51,7 +52,7 @@ export class NewsDeliveryPipeline {
       return timeB - timeA;
     });
 
-    // 5. RANK & SELECT: Send only fresh stories (if only 2 fresh stories, send 2)
+    // 5. RANK & SELECT: Take top fresh stories
     const toDeliver = sortedStories.slice(0, maxToDeliver);
     const messages = [];
 
@@ -65,7 +66,8 @@ export class NewsDeliveryPipeline {
         messages.push({
           story,
           classification,
-          html
+          html,
+          pubTimestamp: story.pubTimestamp || parseUtcTimestamp(story.publishedAt) || 0
         });
 
         // 7. PERSIST: Mark as published so it is NEVER sent again
@@ -75,17 +77,22 @@ export class NewsDeliveryPipeline {
       }
     }
 
+    // Sort delivery chronological (oldest to newest) so when sent to Telegram,
+    // the newest breaking story ends up at the very bottom of the chat!
+    messages.sort((a, b) => a.pubTimestamp - b.pubTimestamp);
+
     console.log(`================== [Pipeline Cycle End - Delivered ${messages.length} Stories] ==================\n`);
     return messages;
   }
 
   /**
-   * Helper for on-demand /latest command: returns top curated stories adhering to the 12-hour limit
+   * Helper for on-demand /latest command: returns top curated stories adhering to the 1-hour limit
    */
   async getLatestCuratedStories(count = 3) {
     const currentUtcMs = Date.now();
     const rawStories = await this.aggregator.fetchAllCandidateStories();
-    const freshStories = filterFreshNewsArticles(rawStories, this.config.minRelevanceScore || 60, currentUtcMs);
+    // Allow up to 2 hours for /latest in case the market is quiet in the last 60 minutes
+    const freshStories = filterFreshNewsArticles(rawStories, this.config.minRelevanceScore || 60, currentUtcMs, Math.max(this.maxAgeMinutes, 120));
 
     // In-memory deduplication for on-demand inspection
     const tempDeduplicator = new Deduplicator(null);
